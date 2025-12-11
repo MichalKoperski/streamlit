@@ -1,0 +1,27 @@
+curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+python3 get-pip.py
+pip install pandas
+pip3 install jupyter
+pip install plotext
+pip install scapy
+pip install paramiko
+
+#wizualizacja, wykresy
+pip install matplotlib
+
+#export/import excela
+pip install openpyxl
+pip install xlwt
+pip install xlrd
+
+#sql
+pip install SQLAlchemy
+pip install psycopg2-binary
+
+cd Pandas-demo
+jupyter notebook
+
+jupyter nbconvert your_notebook.ipynb --to pdf
+
+-----------------------PATH-------------------------
+/Users/michalkoperski/Library/Mobile Documents/com~apple~CloudDocs

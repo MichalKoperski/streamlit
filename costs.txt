@@ -1,0 +1,13 @@
+savings = 5000
+rent = 1361
+D13 = 96
+D14 = 96
+D26 = 13
+electricity = 342
+gas = 0
+upc = 71
+orange = 104
+youtube = 24
+iCloud = 15
+salary = 8399
+vacations = 49
