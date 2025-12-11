@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import date, timedelta
 import os
 import requests
 import calendar
 from pandas.tseries.offsets import MonthBegin
 import plotly.express as px
-
+import plotly.graph_objects as go
 
 
 
@@ -320,30 +319,30 @@ elif page == "📂 Przeglądanie CSV":
 
 
 # ---------------------------------------------------------
-# 3. Budżet – analiza + prognoza na 12 miesięcy
+# 3. Budżet – bez dat, każdy wiersz to miesięczne kwoty
 # ---------------------------------------------------------
 elif page == "📈 Wykresy budżetu":
-    st.title("📈 Budżet – analiza i prognoza na 12 miesięcy")
+    st.title("📈 Budżet – miesięczny i prognoza na 12 miesięcy")
 
     st.write(
         """
-        **Wymagania pliku CSV:**
-        - musi zawierać kolumnę **Salary** – miesięczne wynagrodzenie
-        - wszystkie pozostałe kolumny są traktowane jako **koszty życia**
-        - musi zawierać kolumnę **Data** (lub `date`) określającą dzień transakcji
+        Wgraj plik CSV, w którym:
+        - kolumna **Salary** zawiera miesięczne wynagrodzenie (może być w kilku wierszach – zostanie zsumowane),
+        - wszystkie **pozostałe kolumny są traktowane jako koszty miesięczne**.
 
-        Przykład CSV:
+        Przykład:
 
-        | Data       | Salary | Food | Rent | Fuel | Entertainment |
-        |------------|--------|------|------|------|----------------|
-        | 2024-01-15 | 6000   | 500  | 2500 | 300  | 200            |
+        | Salary | Rent | Food | Fuel | Entertainment |
+        |--------|------|------|------|---------------|
+        | 6000   | 2500 | 800  | 300  | 200           |
+        | 0      | 0    | 200  | 0    | 0             |
         """
     )
 
     uploaded_budget = st.file_uploader("Wgraj CSV budżetowy", type=["csv"], key="budget_csv")
 
     if uploaded_budget is None:
-        st.info("Wgraj CSV, aby kontynuować.")
+        st.info("Wgraj plik CSV, aby kontynuować.")
         st.stop()
 
     # ---------------------------
@@ -354,143 +353,108 @@ elif page == "📈 Wykresy budżetu":
     st.subheader("📄 Surowe dane")
     st.dataframe(df_raw, use_container_width=True)
 
-    # Normalizacja kolumn
-    columns_lower = {col.lower(): col for col in df_raw.columns}
+    if df_raw.empty:
+        st.error("Plik CSV jest pusty.")
+        st.stop()
 
-    # Identyfikacja obowiązkowych pól
+    # Szukamy kolumny Salary (case-insensitive)
+    columns_lower = {col.lower(): col for col in df_raw.columns}
     if "salary" not in columns_lower:
         st.error("Brak wymaganej kolumny **Salary** w pliku CSV.")
         st.stop()
 
     salary_col = columns_lower["salary"]
-
-    # Kolumna daty
-    if "data" in columns_lower:
-        date_col = columns_lower["data"]
-    elif "date" in columns_lower:
-        date_col = columns_lower["date"]
-    else:
-        st.error("Brak kolumny **Data** lub **date** w CSV.")
-        st.stop()
-
-    # Wszystko poza salary i data = koszty
-    cost_columns = [col for col in df_raw.columns if col not in [salary_col, date_col]]
+    cost_columns = [c for c in df_raw.columns if c != salary_col]
 
     if not cost_columns:
-        st.error("CSV musi zawierać co najmniej jedną kolumnę kosztową.")
+        st.error("Musi istnieć co najmniej jedna kolumna kosztowa (poza Salary).")
         st.stop()
 
     st.write("🔍 Wykryte kolumny kosztowe:", cost_columns)
 
     # ---------------------------
-    # Przygotowanie danych
+    # Miesięczny budżet bazowy
     # ---------------------------
-    df = df_raw.rename(columns={
-        salary_col: "Salary",
-        date_col: "Data"
-    })
+    monthly_salary = df_raw[salary_col].sum()
+    monthly_costs = df_raw[cost_columns].sum().sum()
+    monthly_saldo = monthly_salary - monthly_costs
 
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df.dropna(subset=["Data"])
+    st.subheader("📆 Miesięczny budżet bazowy (na podstawie CSV)")
 
-    # Miesięczna agregacja
-    df["Koszty"] = df[cost_columns].sum(axis=1)
-
-    df_monthly = (
-        df.groupby(pd.Grouper(key="Data", freq="MS"))
-        .agg({"Koszty": "sum", "Salary": "sum"})
-        .reset_index()
-        .sort_values("Data")
-    )
-
-    # Kolumna pomocnicza
-    df_monthly["Miesiąc"] = df_monthly["Data"].dt.strftime("%Y-%m")
-    df_monthly["Saldo"] = df_monthly["Salary"] - df_monthly["Koszty"]
-
-    st.subheader("📆 Historia miesięczna")
-    st.dataframe(
-        df_monthly[["Miesiąc", "Koszty", "Salary", "Saldo"]],
-        use_container_width=True
-    )
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Suma Salary / miesiąc", f"{monthly_salary:,.2f}")
+    with c2:
+        st.metric("Suma kosztów / miesiąc", f"{monthly_costs:,.2f}")
+    with c3:
+        st.metric("Saldo / miesiąc", f"{monthly_saldo:,.2f}")
 
     # ---------------------------
     # Prognoza na 12 miesięcy
     # ---------------------------
-    if df_monthly.empty:
-        st.error("Brak danych miesięcznych po agregacji.")
-        st.stop()
-
     st.subheader("🔮 Prognoza na kolejne 12 miesięcy")
 
-    history_months = st.slider(
-        "Liczba miesięcy użytych do wyliczenia średnich:",
-        min_value=1,
-        max_value=min(12, len(df_monthly)),
-        value=min(3, len(df_monthly))
-    )
-
-    df_hist = df_monthly.tail(history_months)
-
-    avg_costs = df_hist["Koszty"].mean()
-    avg_salary = df_hist["Salary"].mean()
-
-    st.write(
-        f"Średnie z ostatnich **{history_months}** miesięcy:\n"
-        f"- Koszty: **{avg_costs:,.2f}**\n"
-        f"- Wynagrodzenie: **{avg_salary:,.2f}**"
-    )
-
-    last_month = df_monthly["Data"].max()
-
-    future_months = pd.date_range(
-        last_month + MonthBegin(1),
-        periods=12,
-        freq="MS"
-    )
+    # Tutaj już nie ma historii ani dat – bierzemy po prostu stałe wartości
+    months_labels = [f"Miesiąc {i}" for i in range(1, 13)]
 
     df_forecast = pd.DataFrame({
-        "Data": future_months,
-        "Miesiąc": future_months.strftime("%Y-%m"),
-        "Koszty_plan": avg_costs,
-        "Salary_plan": avg_salary
+        "Miesiąc": months_labels,
+        "Koszty_plan": monthly_costs,
+        "Salary_plan": monthly_salary
     })
-
     df_forecast["Saldo_plan"] = df_forecast["Salary_plan"] - df_forecast["Koszty_plan"]
 
-    # Tabela prognozy
-    st.markdown("### 📋 Prognoza 12-miesięczna")
+    st.markdown("### 📋 Tabela prognozy (12 miesięcy)")
     st.dataframe(
         df_forecast[["Miesiąc", "Koszty_plan", "Salary_plan", "Saldo_plan"]],
         use_container_width=True
     )
 
     # ---------------------------
-    # Wykres prognozy
+    # Wykres – Plotly (koszty vs salary + saldo)
     # ---------------------------
     st.markdown("### 📊 Wykres budżetu – prognoza")
 
-    fig, ax1 = plt.subplots(figsize=(10, 5))
+    x = df_forecast["Miesiąc"]
 
-    x = range(len(df_forecast))
-    labels = df_forecast["Miesiąc"]
+    fig = go.Figure()
 
-    width = 0.35
-    ax1.bar([i - width/2 for i in x], df_forecast["Koszty_plan"], width=width, label="Koszty (plan)")
-    ax1.bar([i + width/2 for i in x], df_forecast["Salary_plan"], width=width, label="Wynagrodzenie (plan)")
+    fig.add_bar(
+        name="Koszty (plan)",
+        x=x,
+        y=df_forecast["Koszty_plan"]
+    )
+    fig.add_bar(
+        name="Salary (plan)",
+        x=x,
+        y=df_forecast["Salary_plan"]
+    )
 
-    ax1.set_xticks(list(x))
-    ax1.set_xticklabels(labels, rotation=45, ha="right")
-    ax1.set_ylabel("Kwota")
-    ax1.legend(loc="upper left")
-    ax1.grid(True, axis="y", linestyle="--", alpha=0.5)
+    fig.add_trace(
+        go.Scatter(
+            name="Saldo (plan)",
+            x=x,
+            y=df_forecast["Saldo_plan"],
+            mode="lines+markers",
+            yaxis="y2"
+        )
+    )
 
-    # Linia salda
-    ax2 = ax1.twinx()
-    ax2.plot(x, df_forecast["Saldo_plan"], marker="o", label="Saldo (plan)")
-    ax2.set_ylabel("Saldo")
-    ax2.legend(loc="upper right")
+    fig.update_layout(
+        barmode="group",
+        xaxis_title="Miesiąc",
+        yaxis_title="Kwota",
+        yaxis2=dict(
+            title="Saldo",
+            overlaying="y",
+            side="right"
+        ),
+        height=400,
+        margin=dict(l=20, r=20, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
 
-    st.pyplot(fig)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ---------------------------------------------------------
