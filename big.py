@@ -498,9 +498,6 @@ elif page == "💵 Kursy":
                 mask = (df_currency["Data"].dt.date >= start_date) & (df_currency["Data"].dt.date <= end_date)
                 df_filtered = df_currency[mask].copy()
 
-                st.subheader(f"Tabela kursu {currency}")
-                st.dataframe(df_filtered, use_container_width=True)
-
                 # ----------------------------
                 # Wykres – Plotly
                 # ----------------------------
@@ -523,6 +520,9 @@ elif page == "💵 Kursy":
                 fig.update_traces(line=dict(width=2))
 
                 st.plotly_chart(fig, use_container_width=True)
+
+                st.subheader(f"Tabela kursu {currency}")
+                st.dataframe(df_filtered, use_container_width=True)
 
         except requests.HTTPError as e:
             st.error(f"Błąd HTTP podczas pobierania danych z NBP: {e}")
