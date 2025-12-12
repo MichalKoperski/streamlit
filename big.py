@@ -8,7 +8,7 @@ from pandas.tseries.offsets import MonthBegin
 import plotly.express as px
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
-
+from io import StringIO
 
 # ---------------------------------------------------------
 # Ustawienia podstawowe
@@ -699,54 +699,64 @@ elif page == "🤼 PPV: WCW i WWF/WWE":
     WWE_URL = "https://en.wikipedia.org/wiki/List_of_WWE_pay-per-view_and_livestreaming_supercards"
     WCW_URL = "https://en.wikipedia.org/wiki/List_of_JCP/WCW_closed-circuit_events_and_pay-per-view_events"
 
-    @st.cache_data(show_spinner=False)
+    @st.cache_data(show_spinner=False, ttl=60 * 60)
     def load_events(promo: str) -> pd.DataFrame:
-        url = WWE_URL if promo == "WWE" else WCW_URL
-        tables = pd.read_html(url)
+        WWE_URL = "https://en.wikipedia.org/wiki/List_of_WWE_pay-per-view_and_livestreaming_supercards"
+        WCW_URL = "https://en.wikipedia.org/wiki/List_of_JCP/WCW_closed-circuit_events_and_pay-per-view_events"
 
-        # Heurystyka: weź największą sensowną tabelę z kolumną "Event" i "Date"
+        url = WWE_URL if promo == "WWE" else WCW_URL
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (StreamlitApp; +https://streamlit.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
+        }
+
+    # 1) Pobierz HTML przez requests (Wikipedia dużo lepiej to toleruje niż urllib)
+        resp = requests.get(url, headers=headers, timeout=25)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Nie udało się pobrać strony ({resp.status_code}). Spróbuj ponownie za chwilę.")
+
+    html = resp.text
+
+        # 2) Parsuj tabele z HTML (bez urlopen)
+        try:
+            tables = pd.read_html(StringIO(html))
+        except Exception as e:
+            raise RuntimeError(f"Nie udało się sparsować tabel z Wikipedii: {e}")
+
+    # Heurystyka: wybierz tabelę zawierającą kolumny event+date
         candidates = []
         for t in tables:
             cols = [str(c).lower() for c in t.columns]
             if any("event" in c for c in cols) and any("date" in c for c in cols):
                 candidates.append(t)
+
         if not candidates:
             return pd.DataFrame()
 
         df = max(candidates, key=lambda x: len(x))
 
-        # Normalizacja nazw kolumn
-        col_map = {}
-        for c in df.columns:
-            lc = str(c).strip().lower()
-            if "date" in lc:
-                col_map[c] = "Date"
-            elif "event" in lc:
-                col_map[c] = "Event"
-            elif "location" in lc or "venue" in lc or "city" in lc:
-                col_map[c] = "Location"
-            elif "promotion" in lc:
-                col_map[c] = "Promotion"
-            elif "brand" in lc:
-                col_map[c] = "Brand"
-            elif "notes" in lc:
-                col_map[c] = "Notes"
+    # Normalizacja nazw kolumn
+    col_map = {}
+    for c in df.columns:
+        lc = str(c).strip().lower()
+        if "date" in lc:
+            col_map[c] = "Date"
+        elif "event" in lc:
+            col_map[c] = "Event"
+        elif "location" in lc or "venue" in lc or "city" in lc:
+            col_map[c] = "Location"
+        elif "notes" in lc:
+            col_map[c] = "Notes"
 
-        df = df.rename(columns=col_map)
+    df = df.rename(columns=col_map)
 
-        # Upewnij się, że są kluczowe kolumny
-        if "Event" not in df.columns or "Date" not in df.columns:
-            return pd.DataFrame()
+    if "Event" not in df.columns or "Date" not in df.columns:
+        return pd.DataFrame()
 
-        # Daty
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df = df.dropna(subset=["Event"]).copy()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["EventClean"] = df["Event"].astype(str).str.replace(r"\[.*?\]", "", regex=True).str.strip()
 
-        # Link do eventu (spróbujemy z Event -> wikipedia page)
-        # Na Wikipedii w tabelach często Event ma przypisy / format "Event[1]".
-        df["EventClean"] = df["Event"].astype(str).str.replace(r"\[.*?\]", "", regex=True).str.strip()
-
-        return df
+    return df
 
     @st.cache_data(show_spinner=False)
     def fetch_event_details(event_name: str):
