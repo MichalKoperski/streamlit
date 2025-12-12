@@ -105,7 +105,7 @@ page = st.sidebar.radio(
     (
         "📝 Formularz (CSV)",
         "📂 Przeglądanie CSV",
-        "📈 Wykresy budżetu",
+        "📈 Budżet",
         "💵 Kursy",
         "📅 Kalendarz",
         "🧾 Edytor Markdown"
@@ -322,7 +322,7 @@ elif page == "📂 Przeglądanie CSV":
 # ---------------------------------------------------------
 # 3. Budżet – bez dat, każdy wiersz to miesięczne kwoty
 # ---------------------------------------------------------
-elif page == "📈 Wykresy budżetu":
+elif page == "📈 Budżet":
     st.title("📈 Budżet – miesięczny i prognoza na 12 miesięcy")
 
     st.write(
