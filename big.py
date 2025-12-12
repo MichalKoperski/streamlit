@@ -622,42 +622,70 @@ elif page == "📅 Kalendarz":
             render_month_calendar(int(selected_year), m)
             st.markdown("---")
 # ---------------------------------------------------------
-# 6. Edytor Markdown
+# 6. Edytor Markdown (upload + edycja)
 # ---------------------------------------------------------
 elif page == "🧾 Edytor Markdown":
     st.title("🧾 Edytor Markdown")
 
-    st.write("Wpisz Markdown po lewej, a po prawej zobaczysz podgląd na żywo.")
+    st.write(
+        "Możesz **wgrać plik Markdown (.md)** lub pisać od zera. "
+        "Po lewej edycja, po prawej podgląd na żywo."
+    )
+
+    # ---------------------------------
+    # Upload pliku Markdown
+    # ---------------------------------
+    uploaded_md = st.file_uploader(
+        "Wgraj plik Markdown (.md)",
+        type=["md"],
+        key="md_uploader"
+    )
+
+    # Domyślna treść
+    default_md = """# Nowy dokument Markdown
+
+Możesz:
+- pisać od zera
+- albo wgrać istniejący plik `.md`
+
+**Markdown działa od razu.**
+"""
+
+    # Jeśli użytkownik wgrał plik – czytamy jego zawartość
+    if uploaded_md is not None:
+        try:
+            md_text = uploaded_md.read().decode("utf-8")
+            file_name = uploaded_md.name
+        except Exception:
+            st.error("Nie udało się odczytać pliku Markdown.")
+            md_text = default_md
+            file_name = "dokument.md"
+    else:
+        md_text = default_md
+        file_name = "dokument.md"
 
     col1, col2 = st.columns(2)
 
-    # Domyślna treść
-    default_md = """# Mój dokument Markdown
-
-Możesz pisać tutaj:
-- nagłówki
-- listy
-- tabele
-- **pogrubienia**
-- *kursywę*
-- `kod`
-"""
-
+    # ---------------------------------
+    # Edytor
+    # ---------------------------------
     with col1:
         md_text = st.text_area(
             "Edytor Markdown",
-            value=default_md,
-            height=400
+            value=md_text,
+            height=450
         )
 
-        # Zapis do pliku md
         st.download_button(
             label="⬇️ Pobierz jako .md",
             data=md_text.encode("utf-8"),
-            file_name="dokument.md",
+            file_name=file_name,
             mime="text/markdown"
         )
 
+    # ---------------------------------
+    # Podgląd
+    # ---------------------------------
     with col2:
-        st.markdown("### Podgląd")
+        st.markdown("### 👀 Podgląd")
         st.markdown(md_text)
