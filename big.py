@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
-import os
+import os, json
 import requests
 import calendar
 from pandas.tseries.offsets import MonthBegin
@@ -108,7 +108,7 @@ page = st.sidebar.radio(
     (
         "📝 Formularz (CSV)",
         "📂 Przeglądanie CSV",
-        "🧪 Notebook (bezpieczny)",
+        "🧪 Notebook",
         "📈 Budżet",
         "💵 Kursy",
         "📅 Kalendarz",
@@ -326,7 +326,7 @@ elif page == "📂 Przeglądanie CSV":
 # ---------------------------------------------------------
 # 3. Mini-notebook (bezpieczny): multi-cells + save/load
 # ---------------------------------------------------------
-elif page == "🧪 Notebook (bezpieczny)":
+elif page == "🧪 Notebook":
     import json
     import os
     import pandas as pd
