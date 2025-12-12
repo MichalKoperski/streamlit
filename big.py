@@ -108,6 +108,7 @@ page = st.sidebar.radio(
         "📈 Wykresy budżetu",
         "💵 Kursy",
         "📅 Kalendarz"
+        "🧾 Edytor Markdown"
     )
 )
 
@@ -620,3 +621,43 @@ elif page == "📅 Kalendarz":
             st.markdown(f"### {calendar.month_name[m]} {int(selected_year)}")
             render_month_calendar(int(selected_year), m)
             st.markdown("---")
+# ---------------------------------------------------------
+# 6. Edytor Markdown
+# ---------------------------------------------------------
+elif page == "🧾 Edytor Markdown":
+    st.title("🧾 Edytor Markdown")
+
+    st.write("Wpisz Markdown po lewej, a po prawej zobaczysz podgląd na żywo.")
+
+    col1, col2 = st.columns(2)
+
+    # Domyślna treść
+    default_md = """# Mój dokument Markdown
+
+Możesz pisać tutaj:
+- nagłówki
+- listy
+- tabele
+- **pogrubienia**
+- *kursywę*
+- `kod`
+"""
+
+    with col1:
+        md_text = st.text_area(
+            "Edytor Markdown",
+            value=default_md,
+            height=400
+        )
+
+        # Zapis do pliku md
+        st.download_button(
+            label="⬇️ Pobierz jako .md",
+            data=md_text.encode("utf-8"),
+            file_name="dokument.md",
+            mime="text/markdown"
+        )
+
+    with col2:
+        st.markdown("### Podgląd")
+        st.markdown(md_text)
