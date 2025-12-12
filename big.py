@@ -107,7 +107,7 @@ page = st.sidebar.radio(
         "📂 Przeglądanie CSV",
         "📈 Wykresy budżetu",
         "💵 Kursy",
-        "📅 Kalendarz"
+        "📅 Kalendarz",
         "🧾 Edytor Markdown"
     )
 )
