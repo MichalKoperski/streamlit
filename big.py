@@ -327,10 +327,6 @@ elif page == "📂 Przeglądanie CSV":
 # 3. Mini-notebook (bezpieczny): multi-cells + save/load
 # ---------------------------------------------------------
 elif page == "🧪 Notebook":
-    import json
-    import os
-    import pandas as pd
-    import streamlit as st
 
     st.title("🧪 Mini-Notebook (bezpieczny)")
     st.caption("Wiele komórek, Run/Run all, historia wyników, zapis/odczyt JSON. Bez importów i bez dostępu do systemu.")
