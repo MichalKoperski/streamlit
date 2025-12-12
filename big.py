@@ -9,6 +9,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from bs4 import BeautifulSoup
 from io import StringIO
+import re
+from urllib.parse import urljoin
+
 
 # ---------------------------------------------------------
 # Ustawienia podstawowe
@@ -696,6 +699,7 @@ Możesz:
 elif page == "🤼 PPV: WCW i WWF/WWE":
     st.title("🤼 PPV: WCW i WWF/WWE – daty, info i match card")
 
+    WIKI_BASE = "https://en.wikipedia.org"
     WWE_LIST_URL = "https://en.wikipedia.org/wiki/List_of_WWE_pay-per-view_and_livestreaming_supercards"
     WCW_LIST_URL = "https://en.wikipedia.org/wiki/List_of_JCP/WCW_closed-circuit_events_and_pay-per-view_events"
 
@@ -703,88 +707,205 @@ elif page == "🤼 PPV: WCW i WWF/WWE":
         "User-Agent": "Mozilla/5.0 (StreamlitApp; +https://streamlit.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari"
     }
 
-    def _pick_best_table(tables: list[pd.DataFrame]) -> pd.DataFrame:
-        """Wybierz najbardziej sensowną tabelę zawierającą Event i Date."""
-        candidates = []
+    # -------------------------
+    # Helpers
+    # -------------------------
+    def make_unique_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Arrow/Streamlit nie toleruje duplikatów nazw kolumn."""
+        cols = []
+        seen = {}
+        for c in df.columns:
+            c = str(c)
+            if c in seen:
+                seen[c] += 1
+                cols.append(f"{c}.{seen[c]}")
+            else:
+                seen[c] = 0
+                cols.append(c)
+        out = df.copy()
+        out.columns = cols
+        return out
+
+    def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Spłaszcza MultiIndex kolumn do stringów."""
+        out = df.copy()
+        if isinstance(out.columns, pd.MultiIndex):
+            out.columns = [
+                " ".join([str(x) for x in tup if str(x) != "nan"]).strip()
+                for tup in out.columns.values
+            ]
+        else:
+            out.columns = [str(c) for c in out.columns]
+        return out
+
+    def normalize_event_name(s: str) -> str:
+        s = re.sub(r"\[.*?\]", "", str(s)).strip()  # usuń przypisy typu [1]
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def get_html(url: str) -> str:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code} podczas pobierania: {url}")
+        return r.text
+
+    def find_best_event_table_soup(soup: BeautifulSoup) -> BeautifulSoup | None:
+        """
+        Znajdź tabelę (wikitable), która wygląda jak lista eventów:
+        - ma nagłówek zawierający 'Event' i 'Date'
+        """
+        tables = soup.select("table.wikitable")
+        best = None
+        best_score = -1
+
         for t in tables:
-            cols = [str(c).strip().lower() for c in t.columns]
-            if any("event" in c for c in cols) and any("date" in c for c in cols):
-                candidates.append(t)
-        if not candidates:
-            return pd.DataFrame()
-        return max(candidates, key=lambda x: len(x))
+            # nagłówki
+            headers = [th.get_text(" ", strip=True).lower() for th in t.select("tr th")]
+            # score: czy zawiera event + date
+            has_event = any("event" in h for h in headers)
+            has_date = any("date" in h for h in headers)
+            if not (has_event and has_date):
+                continue
+
+            # score po liczbie wierszy
+            rows = t.select("tr")
+            score = len(rows)
+            if score > best_score:
+                best_score = score
+                best = t
+
+        return best
+
+    def extract_event_links_from_table(table: BeautifulSoup) -> dict[str, str]:
+        """
+        Z tabeli wyciąga mapowanie: EventClean -> pełny URL Wikipedii.
+        Wybiera pierwszego sensownego linka w komórce eventu.
+        """
+        event_to_url = {}
+
+        # rozpoznaj indeks kolumny "Event"
+        header_cells = table.select("tr th")
+        header_texts = [h.get_text(" ", strip=True).lower() for h in header_cells]
+
+        # czasem w tabelach nagłówek jest w pierwszym wierszu, ale bywa wielowierszowy
+        # więc bierzemy pierwszy wiersz z th w tej tabeli:
+        first_header_row = None
+        for tr in table.select("tr"):
+            ths = tr.find_all("th")
+            if ths and tr.find_all("td") == []:
+                first_header_row = tr
+                break
+
+        if first_header_row:
+            header_texts = [th.get_text(" ", strip=True).lower() for th in first_header_row.find_all("th")]
+
+        event_idx = None
+        for i, h in enumerate(header_texts):
+            if "event" in h:
+                event_idx = i
+                break
+
+        # iteruj po wierszach danych
+        for tr in table.select("tr"):
+            tds = tr.find_all("td")
+            if not tds:
+                continue
+
+            # jeśli nie wykryliśmy event_idx, spróbuj w całym wierszu znaleźć link z tytułem
+            if event_idx is None or event_idx >= len(tds):
+                a = tr.find("a", href=True)
+                if a:
+                    name = normalize_event_name(a.get_text(" ", strip=True))
+                    href = urljoin(WIKI_BASE, a["href"])
+                    if name and "/wiki/" in href:
+                        event_to_url.setdefault(name, href)
+                continue
+
+            # normalnie: weź komórkę eventu
+            cell = tds[event_idx]
+            a = cell.find("a", href=True)
+            if not a:
+                continue
+            name = normalize_event_name(cell.get_text(" ", strip=True))
+            href = urljoin(WIKI_BASE, a["href"])
+            if name and "/wiki/" in href:
+                event_to_url.setdefault(name, href)
+
+        return event_to_url
 
     @st.cache_data(show_spinner=False, ttl=60 * 60)
-    def load_events_list(promo: str) -> pd.DataFrame:
-        """Pobiera listę eventów PPV dla WWE lub WCW z Wikipedii."""
-        url = WWE_LIST_URL if promo == "WWE" else WCW_LIST_URL
+    def load_events_list(promo: str) -> tuple[pd.DataFrame, dict[str, str]]:
+        """
+        Zwraca:
+        - df: kolumny (Date, Event, Location?, Notes?)
+        - event_links: mapowanie Event -> URL
+        """
+        list_url = WWE_LIST_URL if promo == "WWE" else WCW_LIST_URL
+        html = get_html(list_url)
+        soup = BeautifulSoup(html, "html.parser")
 
-        resp = requests.get(url, headers=HEADERS, timeout=25)
-        if resp.status_code != 200:
-            raise RuntimeError(f"HTTP {resp.status_code} podczas pobierania listy eventów.")
+        table = find_best_event_table_soup(soup)
+        if table is None:
+            return pd.DataFrame(), {}
 
-        html = resp.text
+        # linki eventów (prawdziwe href)
+        event_links = extract_event_links_from_table(table)
 
-        # Parsowanie tabel z HTML (bez urlopen)
-        tables = pd.read_html(StringIO(html))
-        df = _pick_best_table(tables)
-        if df.empty:
-            return df
+        # tabela jako DataFrame
+        tables = pd.read_html(StringIO(str(table)))
+        if not tables:
+            return pd.DataFrame(), event_links
 
-        # Normalizacja nazw kolumn
-        col_map = {}
+        df = tables[0]
+        df = flatten_columns(df)
+        df = make_unique_columns(df)
+
+        # normalizacja nazw kolumn
+        rename = {}
         for c in df.columns:
             lc = str(c).strip().lower()
             if "date" in lc:
-                col_map[c] = "Date"
+                rename[c] = "Date"
             elif "event" in lc:
-                col_map[c] = "Event"
+                rename[c] = "Event"
             elif "location" in lc or "venue" in lc or "city" in lc:
-                col_map[c] = "Location"
+                rename[c] = "Location"
             elif "notes" in lc:
-                col_map[c] = "Notes"
-        df = df.rename(columns=col_map)
+                rename[c] = "Notes"
+        df = df.rename(columns=rename)
 
-        if "Date" not in df.columns or "Event" not in df.columns:
-            return pd.DataFrame()
+        if "Event" not in df.columns or "Date" not in df.columns:
+            return pd.DataFrame(), event_links
 
+        df["Event"] = df["Event"].map(normalize_event_name)
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df["EventClean"] = (
-            df["Event"]
-            .astype(str)
-            .str.replace(r"\[.*?\]", "", regex=True)
-            .str.strip()
-        )
 
-        # Zostaw tylko sensowne kolumny
-        keep = [c for c in ["Date", "EventClean", "Location", "Notes"] if c in df.columns]
-        out = df[keep].copy()
+        # opcjonalne kolumny
+        keep = [c for c in ["Date", "Event", "Location", "Notes"] if c in df.columns]
+        df = df[keep].copy()
 
-        # Usuń puste nazwy eventów
-        out = out[out["EventClean"].astype(str).str.len() > 0]
-        out = out.sort_values("Date", na_position="last").reset_index(drop=True)
-        return out
+        # dołącz URL jeśli udało się dopasować nazwę
+        df["URL"] = df["Event"].map(lambda n: event_links.get(n, ""))
+
+        # usuń puste
+        df = df[df["Event"].astype(str).str.len() > 0].copy()
+        df = df.sort_values("Date", na_position="last").reset_index(drop=True)
+
+        # ostatecznie unikalne kolumny
+        df = make_unique_columns(df)
+        return df, event_links
 
     @st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
-    def fetch_event_details_by_title(event_title: str) -> dict:
+    def fetch_event_details(url: str) -> dict:
         """
-        Pobiera szczegóły pojedynczego eventu:
-        - URL (na podstawie tytułu wiki)
-        - infobox (słownik)
-        - results table (DataFrame) jeśli znajdzie
+        Pobiera:
+        - infobox (dict)
+        - results table (DataFrame or None)
         """
-        # Wikipedia tytuł strony (heurystyka)
-        title = event_title.replace(" ", "_")
-        url = f"https://en.wikipedia.org/wiki/{title}"
-
-        resp = requests.get(url, headers=HEADERS, timeout=25)
-        if resp.status_code != 200:
-            return {"url": url, "infobox": {}, "results": None, "status": resp.status_code}
-
-        html = resp.text
+        html = get_html(url)
         soup = BeautifulSoup(html, "html.parser")
 
-        # Infobox
+        # infobox
         infobox = {}
         ib = soup.select_one("table.infobox")
         if ib:
@@ -797,18 +918,21 @@ elif page == "🤼 PPV: WCW i WWF/WWE":
                     if k and v:
                         infobox[k] = v
 
-        # Próba znalezienia tabeli wyników
+        # results
         results_df = None
         try:
             tables = pd.read_html(StringIO(html))
             for t in tables:
+                t = flatten_columns(t)
+                t = make_unique_columns(t)
                 cols = [str(c).lower() for c in t.columns]
-                # Heurystyka: tabela wyników zwykle ma "Match", "Stipulation", "Winner", "Loser" itp.
+
+                # heurystyka wyników
                 if (
                     any("match" in c for c in cols)
                     or any("winner" in c for c in cols)
                     or any("stipulation" in c for c in cols)
-                    or any("results" in c for c in cols)
+                    or any("result" in c for c in cols)
                 ):
                     if len(t) >= 2:
                         results_df = t
@@ -816,77 +940,83 @@ elif page == "🤼 PPV: WCW i WWF/WWE":
         except Exception:
             results_df = None
 
-        return {"url": url, "infobox": infobox, "results": results_df, "status": 200}
+        return {"infobox": infobox, "results": results_df}
 
     # -------------------------
-    # UI: wybór federacji + filtry
+    # UI
     # -------------------------
     promo = st.selectbox("Federacja", ["WWE", "WCW"], index=0)
 
     try:
-        df = load_events_list(promo)
+        df, links = load_events_list(promo)
     except Exception as e:
         st.error(f"Błąd pobierania listy PPV: {e}")
         st.stop()
 
     if df.empty:
-        st.warning("Nie udało się wykryć tabeli eventów na Wikipedii.")
+        st.warning("Nie udało się pobrać listy eventów (brak tabeli lub zmiana struktury strony).")
         st.stop()
 
+    # filtry
     years = sorted([int(y) for y in df["Date"].dropna().dt.year.unique()]) if "Date" in df.columns else []
-
     c1, c2, c3 = st.columns([1, 2, 1])
+
     with c1:
         year = st.selectbox("Rok", ["Wszystkie"] + years, index=0)
     with c2:
         q = st.text_input("Szukaj w nazwie eventu", value="")
     with c3:
-        limit = st.number_input("Limit", min_value=10, max_value=2000, value=200, step=10)
+        limit = st.number_input("Limit wyników", min_value=10, max_value=2000, value=200, step=10)
 
     view = df.copy()
-    if year != "Wszystkie" and "Date" in view.columns:
+    if year != "Wszystkie":
         view = view[view["Date"].dt.year == int(year)]
     if q.strip():
-        view = view[view["EventClean"].astype(str).str.contains(q.strip(), case=False, na=False)]
+        view = view[view["Event"].astype(str).str.contains(q.strip(), case=False, na=False)]
     view = view.head(int(limit)).reset_index(drop=True)
+
+    # Arrow-safe
+    view = make_unique_columns(view)
 
     st.subheader("Lista eventów")
     st.dataframe(view, use_container_width=True, height=380)
 
     st.markdown("---")
-    st.subheader("Szczegóły eventu (info + matches)")
+    st.subheader("Szczegóły eventu")
 
     if view.empty:
         st.info("Brak wyników dla wybranych filtrów.")
         st.stop()
 
-    selected_event = st.selectbox("Wybierz event", view["EventClean"].tolist())
+    # wybór eventu
+    default_idx = 0
+    selected_event = st.selectbox("Wybierz event", view["Event"].tolist(), index=default_idx)
+
+    # URL eventu
+    selected_url = view.loc[view["Event"] == selected_event, "URL"].iloc[0] if "URL" in view.columns else ""
+    if not selected_url:
+        st.warning("Nie udało się dopasować linku do strony eventu (brak href w tabeli).")
+        st.stop()
+
+    st.markdown(f"**Wikipedia URL:** {selected_url}")
 
     if st.button("Pobierz szczegóły", type="primary"):
-        with st.spinner("Pobieram stronę eventu z Wikipedii..."):
-            details = fetch_event_details_by_title(selected_event)
+        with st.spinner("Pobieram dane eventu..."):
+            details = fetch_event_details(selected_url)
 
-        st.markdown(f"**URL:** {details['url']}")
-        if details["status"] != 200:
-            st.warning(
-                f"Nie udało się pobrać strony eventu (HTTP {details['status']}). "
-                "Część eventów ma inny tytuł strony na Wikipedii."
-            )
-            st.stop()
-
-        # Infobox
+        # infobox
         if details["infobox"]:
-            st.markdown("### Informacje (Infobox)")
-            info_df = pd.DataFrame(
-                [{"Pole": k, "Wartość": v} for k, v in details["infobox"].items()]
-            )
-            st.dataframe(info_df, use_container_width=True, height=260)
+            st.markdown("### Info (Infobox)")
+            info_df = pd.DataFrame([{"Pole": k, "Wartość": v} for k, v in details["infobox"].items()])
+            info_df = make_unique_columns(info_df)
+            st.dataframe(info_df, use_container_width=True, height=280)
         else:
             st.info("Nie znaleziono infobox na stronie eventu.")
 
-        # Matches/Results
+        # results
         if details["results"] is not None and not details["results"].empty:
-            st.markdown("### Matches / Results (tabela z Wikipedii)")
-            st.dataframe(details["results"], use_container_width=True, height=420)
+            st.markdown("### Matches / Results")
+            res = make_unique_columns(details["results"])
+            st.dataframe(res, use_container_width=True, height=450)
         else:
             st.info("Nie udało się automatycznie znaleźć tabeli Results/Match card na tej stronie.")
