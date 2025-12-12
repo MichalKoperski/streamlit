@@ -108,6 +108,7 @@ page = st.sidebar.radio(
     (
         "📝 Formularz (CSV)",
         "📂 Przeglądanie CSV",
+        "🧪 Notebook (bezpieczny)",
         "📈 Budżet",
         "💵 Kursy",
         "📅 Kalendarz",
@@ -321,6 +322,352 @@ elif page == "📂 Przeglądanie CSV":
             st.info("Brak kolumn numerycznych do pokazania statystyk.")
     else:
         st.info("Wgraj plik CSV, aby zobaczyć dane i opcje filtrowania.")
+
+# ---------------------------------------------------------
+# 3. Mini-notebook (bezpieczny): multi-cells + save/load
+# ---------------------------------------------------------
+elif page == "🧪 Notebook (bezpieczny)":
+    import json
+    import os
+    import pandas as pd
+    import streamlit as st
+
+    st.title("🧪 Mini-Notebook (bezpieczny)")
+    st.caption("Wiele komórek, Run/Run all, historia wyników, zapis/odczyt JSON. Bez importów i bez dostępu do systemu.")
+
+    # -------------------------
+    # Helpers / safety
+    # -------------------------
+    SAFE_BUILTINS = {
+        "len": len, "min": min, "max": max, "sum": sum, "sorted": sorted,
+        "round": round, "range": range, "enumerate": enumerate, "zip": zip,
+        "list": list, "dict": dict, "set": set, "tuple": tuple,
+        "str": str, "int": int, "float": float, "bool": bool,
+        "abs": abs, "all": all, "any": any,
+    }
+
+    banned_tokens = [
+        "import ", "__", "open(", "exec(", "eval(", "compile(",
+        "os.", "sys.", "subprocess", "socket", "pathlib", "shutil",
+        "requests", "urllib", "http", "pip", "conda"
+    ]
+
+    def code_is_safe(code: str) -> tuple[bool, str]:
+        for t in banned_tokens:
+            if t in code:
+                return False, f"Niedozwolone użycie: `{t}`"
+        return True, ""
+
+    # plotly.express w bezpieczny sposób (bez normalnego importu w kodzie użytkownika)
+    px = __import__("plotly.express", fromlist=["express"])
+
+    # -------------------------
+    # Data source
+    # -------------------------
+    st.subheader("Dane (df)")
+
+    data_source = st.radio(
+        "Źródło danych dla `df`",
+        ["📤 Upload CSV", "📁 Pliki z repo: wwe.csv / wcw.csv"],
+        horizontal=True
+    )
+
+    df = None
+
+    if data_source == "📤 Upload CSV":
+        up = st.file_uploader("Wgraj CSV", type=["csv"], key="nb_upload")
+        if up is not None:
+            df = pd.read_csv(up)
+            st.session_state["nb_df"] = df
+        else:
+            df = st.session_state.get("nb_df")
+
+    else:
+        # repo files option
+        wwe_path = "wwe.csv"
+        wcw_path = "wcw.csv"
+
+        available = []
+        if os.path.exists(wwe_path):
+            available.append("wwe.csv")
+        if os.path.exists(wcw_path):
+            available.append("wcw.csv")
+
+        if not available:
+            st.warning("Nie widzę `wwe.csv` ani `wcw.csv` w katalogu aplikacji. Dodaj je do repo (root).")
+        else:
+            pick = st.selectbox("Wybierz plik", available)
+            try:
+                df = pd.read_csv(pick)
+                st.session_state["nb_df"] = df
+            except Exception as e:
+                st.error(f"Nie udało się wczytać {pick}: {e}")
+
+    if df is None:
+        st.info("Wybierz źródło danych, aby rozpocząć.")
+        st.stop()
+
+    st.markdown("**Podgląd `df`**")
+    st.dataframe(df.head(30), use_container_width=True)
+
+    # -------------------------
+    # Notebook state
+    # -------------------------
+    if "nb_cells" not in st.session_state:
+        st.session_state["nb_cells"] = [
+            {
+                "id": 1,
+                "title": "Komórka 1",
+                "code": "out_df = df.head(10)\n# fig = px.histogram(df, x=df.columns[0])",
+                "last_text": "",
+                "has_table": False,
+                "has_fig": False,
+            }
+        ]
+        st.session_state["nb_next_id"] = 2
+
+    def add_cell():
+        cid = st.session_state["nb_next_id"]
+        st.session_state["nb_next_id"] += 1
+        st.session_state["nb_cells"].append({
+            "id": cid,
+            "title": f"Komórka {cid}",
+            "code": "# out_df = ...\n# fig = ...",
+            "last_text": "",
+            "has_table": False,
+            "has_fig": False,
+        })
+
+    def delete_cell(cell_id: int):
+        st.session_state["nb_cells"] = [c for c in st.session_state["nb_cells"] if c["id"] != cell_id]
+
+    def move_cell(cell_id: int, direction: int):
+        cells = st.session_state["nb_cells"]
+        idx = next((i for i, c in enumerate(cells) if c["id"] == cell_id), None)
+        if idx is None:
+            return
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(cells):
+            return
+        cells[idx], cells[new_idx] = cells[new_idx], cells[idx]
+        st.session_state["nb_cells"] = cells
+
+    # -------------------------
+    # Save / Load notebook (JSON)
+    # -------------------------
+    st.subheader("Notatnik: zapis / odczyt")
+
+    colS1, colS2, colS3 = st.columns([1, 1, 2])
+
+    with colS1:
+        if st.button("➕ Dodaj komórkę"):
+            add_cell()
+
+    with colS2:
+        # Export notebook JSON
+        nb_export = {
+            "version": 1,
+            "cells": [
+                {"id": c["id"], "title": c["title"], "code": c["code"]}
+                for c in st.session_state["nb_cells"]
+            ]
+        }
+        st.download_button(
+            "⬇️ Pobierz notebook.json",
+            data=json.dumps(nb_export, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name="notebook.json",
+            mime="application/json",
+        )
+
+    with colS3:
+        nb_file = st.file_uploader("Wczytaj notebook.json", type=["json"], key="nb_json")
+        if nb_file is not None:
+            try:
+                loaded = json.loads(nb_file.read().decode("utf-8"))
+                if not isinstance(loaded, dict) or "cells" not in loaded:
+                    raise ValueError("Zły format JSON (brak 'cells').")
+
+                new_cells = []
+                max_id = 0
+                for c in loaded["cells"]:
+                    cid = int(c.get("id", 0))
+                    max_id = max(max_id, cid)
+                    new_cells.append({
+                        "id": cid,
+                        "title": str(c.get("title", f"Komórka {cid}")),
+                        "code": str(c.get("code", "")),
+                        "last_text": "",
+                        "has_table": False,
+                        "has_fig": False,
+                    })
+
+                if not new_cells:
+                    raise ValueError("Brak komórek w JSON.")
+
+                st.session_state["nb_cells"] = new_cells
+                st.session_state["nb_next_id"] = max_id + 1
+                st.success("Wczytano notatnik ✅")
+            except Exception as e:
+                st.error(f"Nie udało się wczytać JSON: {e}")
+
+    st.markdown("---")
+
+    # -------------------------
+    # Execution engine
+    # -------------------------
+    def run_cell(cell_index: int):
+        cell = st.session_state["nb_cells"][cell_index]
+        code = cell["code"]
+
+        ok, reason = code_is_safe(code)
+        if not ok:
+            cell["last_text"] = f"❌ Zablokowano: {reason}"
+            cell["has_table"] = False
+            cell["has_fig"] = False
+            return None, None
+
+        # Shared namespace across cells (like a notebook)
+        if "nb_ns" not in st.session_state:
+            st.session_state["nb_ns"] = {}
+
+        ns = st.session_state["nb_ns"]
+
+        # Provide df/pd/px each run
+        global_env = {
+            "__builtins__": SAFE_BUILTINS,
+            "df": df,
+            "pd": pd,
+            "px": px,
+        }
+        # Keep previous variables in ns
+        global_env.update(ns)
+
+        local_env = {}
+
+        try:
+            exec(code, global_env, local_env)
+
+            # merge locals into ns
+            for k, v in local_env.items():
+                global_env[k] = v
+
+            # persist updated ns (excluding builtins)
+            ns_new = {k: v for k, v in global_env.items() if k not in ["__builtins__"]}
+            st.session_state["nb_ns"] = ns_new
+
+            out_df = ns_new.get("out_df", None)
+            fig = ns_new.get("fig", None)
+
+            cell["last_text"] = "✅ Wykonano"
+            cell["has_table"] = out_df is not None
+            cell["has_fig"] = fig is not None
+
+            return out_df, fig
+
+        except Exception as e:
+            cell["last_text"] = f"❌ Błąd: {e}"
+            cell["has_table"] = False
+            cell["has_fig"] = False
+            return None, None
+
+    topA, topB, topC = st.columns([1, 1, 2])
+
+    with topA:
+        run_all = st.button("▶️ Run all", type="primary")
+    with topB:
+        if st.button("🧹 Wyczyść namespace (zmienne)"):
+            st.session_state["nb_ns"] = {}
+            st.success("Wyczyszczono zmienne notebooka.")
+    with topC:
+        st.caption("Używaj `out_df = ...` (tabela) oraz/lub `fig = ...` (wykres Plotly). Zmienne zostają między komórkami.")
+
+    if run_all:
+        with st.spinner("Wykonuję wszystkie komórki..."):
+            for i in range(len(st.session_state["nb_cells"])):
+                run_cell(i)
+
+    # -------------------------
+    # Render cells
+    # -------------------------
+    st.subheader("Komórki")
+
+    for i, cell in enumerate(st.session_state["nb_cells"]):
+        with st.container(border=True):
+            head1, head2, head3, head4, head5 = st.columns([2.2, 0.8, 0.8, 0.8, 0.6])
+
+            with head1:
+                cell["title"] = st.text_input(
+                    "Tytuł",
+                    value=cell["title"],
+                    key=f"nb_title_{cell['id']}"
+                )
+            with head2:
+                if st.button("⬆️", key=f"nb_up_{cell['id']}"):
+                    move_cell(cell["id"], -1)
+                    st.rerun()
+            with head3:
+                if st.button("⬇️", key=f"nb_down_{cell['id']}"):
+                    move_cell(cell["id"], +1)
+                    st.rerun()
+            with head4:
+                if st.button("▶️ Run", key=f"nb_run_{cell['id']}"):
+                    out_df, fig = run_cell(i)
+                else:
+                    out_df = None
+                    fig = None
+            with head5:
+                if st.button("🗑️", key=f"nb_del_{cell['id']}"):
+                    delete_cell(cell["id"])
+                    st.rerun()
+
+            # code editor
+            cell["code"] = st.text_area(
+                "Kod",
+                value=cell["code"],
+                height=170,
+                key=f"nb_code_{cell['id']}"
+            )
+
+            # status
+            if cell.get("last_text"):
+                st.write(cell["last_text"])
+
+            # show last outputs using current namespace values (so you see latest)
+            ns = st.session_state.get("nb_ns", {})
+            out_df_current = ns.get("out_df", None)
+            fig_current = ns.get("fig", None)
+
+            # To avoid confusion: only show outputs if this cell says it produced them last time
+            if cell.get("has_table") and out_df_current is not None:
+                st.markdown("**out_df**")
+                if isinstance(out_df_current, pd.DataFrame):
+                    st.dataframe(out_df_current, use_container_width=True, height=320)
+                else:
+                    st.write(out_df_current)
+
+            if cell.get("has_fig") and fig_current is not None:
+                st.markdown("**fig**")
+                st.plotly_chart(fig_current, use_container_width=True)
+
+    # -------------------------
+    # Quick commands (like notebook)
+    # -------------------------
+    st.markdown("---")
+    st.subheader("Szybkie akcje")
+
+    q1, q2, q3, q4 = st.columns(4)
+    with q1:
+        if st.button("df.shape"):
+            st.write(df.shape)
+    with q2:
+        if st.button("df.columns"):
+            st.write(list(df.columns))
+    with q3:
+        if st.button("df.describe()"):
+            st.dataframe(df.describe(include="all"), use_container_width=True)
+    with q4:
+        if st.button("df.head(20)"):
+            st.dataframe(df.head(20), use_container_width=True)
 
 
 # ---------------------------------------------------------
