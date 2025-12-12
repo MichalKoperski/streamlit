@@ -106,7 +106,7 @@ page = st.sidebar.radio(
         "📝 Formularz (CSV)",
         "📂 Przeglądanie CSV",
         "📈 Wykresy budżetu",
-        "💵 Kurs USD",
+        "💵 Kursy",
         "📅 Kalendarz"
     )
 )
@@ -460,7 +460,7 @@ elif page == "📈 Wykresy budżetu":
 # ---------------------------------------------------------
 # 4. Wykres zmian kursów walut (USD / EUR, API NBP + Plotly)
 # ---------------------------------------------------------
-elif page == "💵 Kurs USD":
+elif page == "💵 Kursy":
     st.title("💵 Zmiany kursów walut (NBP)")
 
     st.write(
