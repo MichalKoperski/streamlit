@@ -808,7 +808,12 @@ elif page == "🤼 PPV: WCW i WWF/WWE":
 
     promo = st.selectbox("Wybierz federację", ["WWE", "WCW"], index=0)
 
-    df = load_events(promo)
+    try:
+        df = load_events(promo)
+    except Exception as e:
+        st.error(f"Błąd pobierania listy PPV: {e}")
+        st.stop()
+
     if df.empty:
         st.error("Nie udało się pobrać tabeli eventów z Wikipedii.")
         st.stop()
