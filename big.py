@@ -112,7 +112,7 @@ page = st.sidebar.radio(
         "💵 Kursy",
         "📅 Kalendarz",
         "🧾 Edytor Markdown",
-        "🤼 PPV: WCW i WWF/WWE"
+        "🤼 PPV (CSV: WWE/WCW)"
     )
 )
 
